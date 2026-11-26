@@ -1,0 +1,222 @@
+{
+  "ok": true,
+  "pass": true,
+  "passed": 13,
+  "total": 13,
+  "results": [
+    {
+      "id": "sym1",
+      "title": "I 型核严格偶对称 h[n]=h[N-1-n]",
+      "pass": true,
+      "detail": "最大对称残差 8.19e-19"
+    },
+    {
+      "id": "sym2",
+      "title": "II 型偶数长核保持偶对称",
+      "pass": true,
+      "detail": "残差 5.04e-17"
+    },
+    {
+      "id": "type2fail",
+      "title": "II 型无法实现 Nyquist 增益时明确失败并给建议",
+      "pass": true,
+      "detail": "II 型（偶数长偶对称）FIR 在 Nyquist 频率必有零点，无法实现当前 Nyquist 处的目标增益。请改用 I 型（奇数长）。"
+    },
+    {
+      "id": "gd",
+      "title": "实测群延迟恒等于 (N-1)/2 = 63 样本",
+      "pass": true,
+      "detail": "均值 63.000000，最大偏离 4.97e-14"
+    },
+    {
+      "id": "approx",
+      "title": "实际幅度响应对目标的最大误差 < 1.5 dB",
+      "pass": true,
+      "detail": "最大 0.059 dB，RMS 0.0051 dB"
+    },
+    {
+      "id": "direct",
+      "title": "直接卷积已知结果 [1,2,3]*[1,1]=[1,3,5,3]",
+      "pass": true,
+      "detail": "1,3,5,3"
+    },
+    {
+      "id": "stream",
+      "title": "分块 overlap-add（含重叠区与尾部拼接）与直接卷积一致，长度=x+N-1",
+      "pass": true,
+      "detail": "7 种块长最大误差 3.29e-14，长度正确"
+    },
+    {
+      "id": "latency",
+      "title": "脉冲经真实卷积后的峰位 = 63 样本（算法延迟，未在播放起点隐藏）",
+      "pass": true,
+      "detail": "实测峰位 63；前振铃能量 -15.3 dB，峰前最大旁瓣 -16.3 dB"
+    },
+    {
+      "id": "tail",
+      "title": "卷积输出长度 = x.length + N - 1，尾部 N-1 样本保留",
+      "pass": true,
+      "detail": "输出 4222 = 4096+127-1"
+    },
+    {
+      "id": "peaks-old",
+      "title": "旧尾鼓点：回印(deferred) 与耳返(dual-new) 实测峰差 = Δgd",
+      "pass": true,
+      "detail": "回印峰 46955，耳返峰 47403，差 448（期望 448），拍差 0.01929"
+    },
+    {
+      "id": "peaks-new",
+      "title": "新核生效后的鼓点：两路径峰差 = 0",
+      "pass": true,
+      "detail": "差 0"
+    },
+    {
+      "id": "comb-raw",
+      "title": "未对齐双核相加被检出梳状抵消",
+      "pass": true,
+      "detail": "131 个陷波，最深 112.7 dB，间隔 108.4 Hz"
+    },
+    {
+      "id": "comb-aligned",
+      "title": "群延迟对齐后不再出现梳状抵消",
+      "pass": true,
+      "detail": "陷波数 0"
+    }
+  ],
+  "artifacts": {
+    "oldTail": {
+      "echoPeakFile": 46955,
+      "iemPeakFile": 47403,
+      "difference": {
+        "absoluteSamples": 448,
+        "absoluteMs": 9.333333333333334,
+        "absoluteBeats": 0.019288728149487643,
+        "signedSamples": 448
+      },
+      "comb": {
+        "delaySamples": 448,
+        "raw": {
+          "detected": true,
+          "notchCount": 131,
+          "notches": [
+            {
+              "freqHz": 52.734375,
+              "depthDb": 30.526828283052048
+            },
+            {
+              "freqHz": 161.1328125,
+              "depthDb": 36.47267693744371
+            },
+            {
+              "freqHz": 266.6015625,
+              "depthDb": 27.07826288536605
+            },
+            {
+              "freqHz": 375,
+              "depthDb": 112.6953633407035
+            },
+            {
+              "freqHz": 483.3984375,
+              "depthDb": 27.07827149705531
+            },
+            {
+              "freqHz": 588.8671875,
+              "depthDb": 36.47267856495733
+            },
+            {
+              "freqHz": 697.265625,
+              "depthDb": 30.526804674999536
+            },
+            {
+              "freqHz": 802.734375,
+              "depthDb": 30.52685409499165
+            },
+            {
+              "freqHz": 911.1328125,
+              "depthDb": 36.47267056327614
+            },
+            {
+              "freqHz": 1016.6015625,
+              "depthDb": 27.07822936034774
+            },
+            {
+              "freqHz": 1125,
+              "depthDb": 92.65451708466298
+            },
+            {
+              "freqHz": 1233.3984375,
+              "depthDb": 27.078304669030572
+            },
+            {
+              "freqHz": 1338.8671875,
+              "depthDb": 36.47271122007876
+            },
+            {
+              "freqHz": 1447.265625,
+              "depthDb": 30.525968406532844
+            },
+            {
+              "freqHz": 1552.734375,
+              "depthDb": 30.526353534644525
+            },
+            {
+              "freqHz": 1661.1328125,
+              "depthDb": 36.41429159991794
+            },
+            {
+              "freqHz": 1766.6015625,
+              "depthDb": 27.057004681970295
+            },
+            {
+              "freqHz": 1875,
+              "depthDb": 44.15779966478441
+            },
+            {
+              "freqHz": 1983.3984375,
+              "depthDb": 26.98563444260098
+            },
+            {
+              "freqHz": 2088.8671875,
+              "depthDb": 36.326363566539285
+            },
+            {
+              "freqHz": 2197.265625,
+              "depthDb": 30.490132090072443
+            },
+            {
+              "freqHz": 2302.734375,
+              "depthDb": 30.55643340781299
+            },
+            {
+              "freqHz": 2411.1328125,
+              "depthDb": 36.44070813933183
+            },
+            {
+              "freqHz": 2516.6015625,
+              "depthDb": 27.109496370603985
+            }
+          ],
+          "deepestDepthDb": 112.6953633407035,
+          "medianDepthDb": 30.533832711424346,
+          "medianSpacingHz": 108.3984375,
+          "expectedSpacingHz": 107.14285714285714,
+          "spacingErrorRatio": 0.011718750000000038,
+          "regularity": 0,
+          "thresholdDb": 9
+        },
+        "aligned": {
+          "detected": false,
+          "notchCount": 0,
+          "notches": [],
+          "deepestDepthDb": null,
+          "medianDepthDb": null,
+          "medianSpacingHz": null,
+          "expectedSpacingHz": 107.14285714285714,
+          "spacingErrorRatio": null,
+          "regularity": null,
+          "thresholdDb": 9
+        }
+      }
+    }
+  }
+}

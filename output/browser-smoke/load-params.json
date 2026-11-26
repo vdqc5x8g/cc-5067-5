@@ -1,0 +1,1 @@
+{"app":"linear-phase-eq","version":1,"params":{"points":[{"f":0,"db":2},{"f":0.5,"db":-3},{"f":1,"db":1}],"N":333,"firType":"I","window":"hann","sampleRate":48000}}

@@ -1,0 +1,20 @@
+{
+  "name": "linear-phase-eq",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "线性相位 FIR 均衡器：真实卷积、双核交接、峰位/拍差测量与梳状抵消检测",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js",
+    "test": "node --test test/*.test.mjs",
+    "verify": "node scripts/verify.mjs",
+    "smoke:browser": "node scripts/browser-smoke.mjs"
+  },
+  "devDependencies": {
+    "jsdom": "^31.0.1"
+  }
+}

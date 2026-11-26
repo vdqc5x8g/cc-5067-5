@@ -1,0 +1,51 @@
+{
+  "app": "linear-phase-eq",
+  "version": 1,
+  "params": {
+    "points": [
+      {
+        "f": 0,
+        "db": -14.4
+      },
+      {
+        "f": 0.5306,
+        "db": -22.1
+      },
+      {
+        "f": 1,
+        "db": 0
+      }
+    ],
+    "N": 511,
+    "firType": "I",
+    "window": "hann",
+    "stopbandDb": 70,
+    "sampleRate": 48000
+  },
+  "session": {
+    "scenario": "new-effective",
+    "N1": 127,
+    "N2": 1023,
+    "bpm": 124,
+    "iemBlock": 256,
+    "material": "click",
+    "echoMode": "deferred",
+    "iemMode": "dual-old",
+    "targetPoints": [
+      {
+        "f": 0,
+        "db": -14.4
+      },
+      {
+        "f": 0.5306,
+        "db": -22.1
+      },
+      {
+        "f": 1,
+        "db": 0
+      }
+    ],
+    "window": "hann",
+    "sampleRate": 48000
+  }
+}

@@ -1,0 +1,259 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="icon" href="data:," />
+<title>线性相位均衡器 · FIR 母带面板</title>
+<link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="logo">LP-EQ</span>
+    <div>
+      <h1>线性相位均衡器 / 母带试听与双路径延迟测量台</h1>
+      <p class="sub">可拖动目标曲线 → 对称 FIR 设计 → 真实卷积（overlap-add）→ 实测幅度 / 相位 / 群延迟 / 峰位拍差</p>
+    </div>
+  </div>
+  <div class="top-actions">
+    <span id="health" class="health"><i class="dot" id="health-dot"></i><span id="health-text">检查服务…</span></span>
+    <button id="btn-save-params" class="btn">保存参数</button>
+    <button id="btn-load-params" class="btn">读取参数</button>
+    <input type="file" id="file-params" accept="application/json,.json" hidden />
+    <button id="btn-reset-params" class="btn ghost">恢复默认</button>
+  </div>
+</header>
+
+<main class="layout">
+
+  <!-- 1. EQ 曲线 + 内核设计 -->
+  <section class="card span-7" id="eq-card">
+    <div class="card-h">
+      <h2>① 目标频率响应（可拖动 EQ 曲线）</h2>
+      <div class="presets" id="preset-row">
+        <button class="chip" data-preset="flat">平直</button>
+        <button class="chip" data-preset="bass">低频架式</button>
+        <button class="chip" data-preset="smile">微笑</button>
+        <button class="chip" data-preset="cut">中频削减</button>
+        <button class="chip" data-preset="lowpass">低通规格</button>
+      </div>
+    </div>
+    <p class="hint">拖动圆点改变增益；双击曲线空白处加点，双击圆点删除（至少保留 2 点）。虚线=目标，实线=由当前 FIR 内核实测的幅度响应。</p>
+    <div id="eq-plot-wrap">
+      <svg id="eq-svg" viewBox="0 0 760 340" preserveAspectRatio="none" data-testid="eq-svg"></svg>
+    </div>
+
+    <div class="controls-grid">
+      <label>核长 N（样本）
+        <div class="row"><input type="range" id="input-N" min="7" max="2049" step="1" value="255" /><b id="val-N">255</b></div>
+      </label>
+      <label>对称条件 / FIR 类型
+        <select id="select-firType">
+          <option value="I" selected>I 型：奇数长 · 偶对称（通用 EQ）</option>
+          <option value="II">II 型：偶数长 · 偶对称（Nyquist 必为零）</option>
+        </select>
+      </label>
+      <label>窗函数
+        <select id="select-window">
+          <option value="hann" selected>Hann</option>
+          <option value="hamming">Hamming</option>
+          <option value="blackman">Blackman</option>
+          <option value="kaiser">Kaiser（可调阻带）</option>
+          <option value="rectangular">矩形（无窗）</option>
+        </select>
+      </label>
+      <label id="kaiser-label">Kaiser β / 阻带
+        <div class="row"><input type="range" id="input-stopband" min="21" max="100" step="1" value="70" /><b id="val-stopband">70 dB</b></div>
+      </label>
+      <label>采样率
+        <select id="select-sampleRate">
+          <option value="44100">44.1 kHz</option>
+          <option value="48000" selected>48 kHz</option>
+          <option value="96000">96 kHz</option>
+        </select>
+      </label>
+      <div class="spec-box">
+        <span>规格判定：</span>
+        <label class="inline">过渡带≤<input type="number" id="spec-transition" value="900" min="20" step="50" />Hz</label>
+        <label class="inline">最大误差≤<input type="number" id="spec-error" value="1.0" min="0.1" step="0.1" />dB</label>
+        <span id="spec-status" class="badge">—</span>
+      </div>
+    </div>
+    <div id="kernel-feedback" class="feedback" data-testid="kernel-feedback" role="alert"></div>
+  </section>
+
+  <!-- 2. 实际指标 + 自检 -->
+  <section class="card span-5" id="metrics-card">
+    <div class="card-h"><h2>② 内核实际指标（不是理想曲线）</h2>
+      <button id="btn-self-test" class="btn small">运行内核自检</button>
+    </div>
+    <div class="metric-grid">
+      <div class="metric"><span>算法群延迟</span><b id="metric-gd" data-testid="metric-gd-samples">—</b><em>样本</em></div>
+      <div class="metric"><span>延迟时长</span><b id="metric-latency" data-testid="metric-latency-ms">—</b><em>ms</em></div>
+      <div class="metric"><span>卷积尾部</span><b id="metric-tail" data-testid="metric-tail-samples">—</b><em>样本</em></div>
+      <div class="metric"><span>对称残差</span><b id="metric-sym" data-testid="metric-symmetry-residual">—</b><em>max|h−h̃|/peak</em></div>
+      <div class="metric"><span>实测过渡带</span><b id="metric-trans" data-testid="metric-transition">—</b><em>-1↔-40dB / Hz</em></div>
+      <div class="metric"><span>最大逼近误差</span><b id="metric-err" data-testid="metric-max-error">—</b><em>dB</em></div>
+      <div class="metric"><span>群延迟波动</span><b id="metric-gddev">—</b><em>样本</em></div>
+      <div class="metric"><span>峰前/前振铃</span><b id="metric-prering" data-testid="metric-prering">—</b><em>dB 能量</em></div>
+    </div>
+    <div id="self-test-summary" class="selftest-summary">尚未运行自检。</div>
+    <ul id="self-test-list" class="selftest-list"></ul>
+  </section>
+
+  <!-- 3. 响应图：幅度/相位/群延迟 -->
+  <section class="card span-7">
+    <div class="card-h">
+      <h2>③ 实际实现的幅度 / 相位 / 群延迟</h2>
+      <div class="toggles">
+        <label class="inline"><input type="checkbox" id="resp-mag" checked /> 幅度</label>
+        <label class="inline"><input type="checkbox" id="resp-phase" /> 相位(展开)</label>
+        <label class="inline"><input type="checkbox" id="resp-gd" checked /> 群延迟</label>
+        <button id="btn-compare" class="btn small">锁定对比 A/B</button>
+        <button id="btn-compare-clear" class="btn small ghost">清除对比</button>
+      </div>
+    </div>
+    <svg id="response-svg" viewBox="0 0 760 320" preserveAspectRatio="none" data-testid="response-svg"></svg>
+    <p class="hint" id="response-hint">左轴：幅度 dB；叠加群延迟曲线（右轴，样本）。相位模式显示展开相位。灰虚线为锁定的对比内核。</p>
+  </section>
+
+  <!-- 4. 取舍扫描 -->
+  <section class="card span-5">
+    <div class="card-h"><h2>④ 长度 × 过渡带 × 误差 取舍</h2>
+      <button id="btn-scan" class="btn small">扫描 N=33…1025</button>
+    </div>
+    <p class="hint">砖墙截止 0.35 Nyquist 规格下实测 -1↔-40dB 宽度（Kaiser），并对你当前曲线报告最大误差。</p>
+    <div class="table-wrap">
+      <table class="data-table" id="tradeoff-table" data-testid="tradeoff-table">
+        <thead><tr><th>N</th><th>群延迟</th><th>ms</th><th>过渡Hz</th><th>最大误差dB</th><th>阻带底dB</th></tr></thead>
+        <tbody id="tradeoff-body"><tr><td colspan="6" class="muted">点击“扫描”生成可检查的取舍表。</td></tr></tbody>
+      </table>
+    </div>
+    <div class="mini-chart"><svg id="tradeoff-chart" viewBox="0 0 700 120" preserveAspectRatio="xMidYMid meet" role="img" aria-label="长度与过渡带权衡柱状图"></svg></div>
+  </section>
+
+  <!-- 5. 实时试听 + 导出 -->
+  <section class="card span-5" id="audition-card">
+    <div class="card-h"><h2>⑤ 实时试听 / 输出文件</h2>
+      <span id="audio-status" class="badge">AudioWorklet 未启动</span>
+    </div>
+    <div class="source-row">
+      <div class="btn-group" id="material-row">
+        <button class="btn small" data-material="drums">鼓循环</button>
+        <button class="btn small" data-material="impulse">脉冲</button>
+        <button class="btn small" data-material="sweep">对数扫频</button>
+      </div>
+      <label class="btn small file-btn">上传音频<input type="file" id="file-audio" accept="audio/*" hidden /></label>
+    </div>
+    <div class="row gap">
+      <button id="btn-play" class="btn primary">▶ 实时卷积试听</button>
+      <button id="btn-stop" class="btn">■ 停止</button>
+      <label class="inline"><input type="checkbox" id="chk-wet" checked /> 线性相位湿声（取消=干声直通对比）</label>
+    </div>
+    <p class="hint" id="audition-info">实时路径：AudioBufferSource → AudioWorklet(overlap-add 卷积当前核) → 输出。不会用普通 Biquad 串联冒充线性相位。</p>
+    <div class="row gap">
+      <button id="btn-export-wav" class="btn">⬇ 导出处理后 WAV（含完整尾部）</button>
+      <span id="export-status" class="muted"></span>
+    </div>
+  </section>
+
+  <!-- 6. 双路径会话 -->
+  <section class="card span-12 session-card" id="session-card">
+    <div class="card-h">
+      <h2>⑥ 母带回印 × 固定时钟耳返：核长切换 / 交接 / 实测峰位拍差</h2>
+      <button id="btn-run-session" class="btn primary" data-testid="session-run">运行双路径离线会话</button>
+    </div>
+
+    <div class="session-config">
+      <label>情景
+        <select id="select-scenario" data-testid="select-scenario">
+          <option value="old-tail" selected>A：增大核长时，孤立鼓点仍在旧卷积尾部</option>
+          <option value="new-effective">B：把鼓点移到新核生效之后</option>
+        </select>
+      </label>
+      <label>旧核 N1<input type="number" id="input-N1" value="127" min="7" max="2049" step="2" /></label>
+      <label>新核 N2<input type="number" id="input-N2" value="1023" min="9" max="4097" step="2" /></label>
+      <label>BPM<input type="number" id="input-bpm" value="124" min="40" max="240" /></label>
+      <label>耳返块时钟<input type="number" id="input-iemBlock" value="256" min="32" max="2048" step="32" /></label>
+      <label>鼓素材
+        <select id="select-session-material">
+          <option value="click" selected>样本脉冲（严格校验）</option>
+          <option value="kick">合成尖锐底鼓</option>
+        </select>
+      </label>
+      <label>母带回印策略
+        <select id="select-echo-mode" data-testid="select-echo-mode">
+          <option value="deferred" selected>延后交接（旧尾完整）</option>
+          <option value="dual-old">双核对齐·旧尾声</option>
+          <option value="dual-new">双核·新时标</option>
+        </select>
+      </label>
+      <label>鼓手耳返策略
+        <select id="select-iem-mode" data-testid="select-iem-mode">
+          <option value="deferred">延后交接（旧尾完整）</option>
+          <option value="dual-old">双核对齐·旧尾声</option>
+          <option value="dual-new" selected>双核·新时标</option>
+        </select>
+      </label>
+    </div>
+
+    <div class="peak-summary">
+      <div class="peak-card echo">
+        <h3>可等候的母带回印</h3>
+        <div class="peak-grid">
+          <span>状态</span><b id="echo-status" data-testid="echo-status">未运行</b>
+          <span>等候耗时</span><b id="echo-await">—</b>
+          <span>实测峰位(文件样本)</span><b id="echo-peak" data-testid="echo-peak">—</b>
+          <span>输入时钟/拍</span><b id="echo-beat">—</b>
+          <span>缓冲长度</span><b id="echo-length">—</b>
+        </div>
+        <canvas id="wave-echo" class="wave" width="900" height="150" data-testid="wave-echo"></canvas>
+        <audio id="audio-echo" controls preload="none"></audio>
+        <a id="dl-echo" class="btn small" download="echo.wav">下载回印 WAV</a>
+      </div>
+
+      <div class="diff-card">
+        <h3>绝对拍差（均来自真实缓冲测峰）</h3>
+        <div class="diff-big" id="beat-diff" data-testid="beat-diff">— 拍</div>
+        <div class="diff-row"><span>样本差</span><b id="sample-diff" data-testid="sample-diff">—</b></div>
+        <div class="diff-row"><span>毫秒差</span><b id="ms-diff">—</b></div>
+        <div class="diff-row"><span>新核 Δgd</span><b id="delta-gd">—</b></div>
+        <div class="comb-box">
+          <div>梳状抵消·未对齐双核：<b id="comb-raw" data-testid="comb-raw">—</b></div>
+          <div>梳状抵消·gd 对齐后：<b id="comb-aligned" data-testid="comb-aligned">—</b></div>
+        </div>
+        <p class="hint" id="diff-explain"></p>
+      </div>
+
+      <div class="peak-card iem">
+        <h3>固定时钟鼓手耳返</h3>
+        <div class="peak-grid">
+          <span>块/时钟</span><b id="iem-blocks">—</b>
+          <span>切换锁存点</span><b id="iem-switch">—</b>
+          <span>实测峰位(文件样本)</span><b id="iem-peak" data-testid="iem-peak">—</b>
+          <span>输入时钟/拍</span><b id="iem-beat">—</b>
+          <span>缓冲长度</span><b id="iem-length">—</b>
+        </div>
+        <canvas id="wave-iem" class="wave" width="900" height="150" data-testid="wave-iem"></canvas>
+        <audio id="audio-iem" controls preload="none"></audio>
+        <a id="dl-iem" class="btn small" download="iem.wav">下载耳返 WAV</a>
+      </div>
+    </div>
+    <p class="hint">说明：两条 WAV 共享同一文件时间原点 PREROLL=gd2（真实前置样本，不是播放器起点校准）。移动任何显示标尺都不会改变这些由音频量出的峰位；可直接 <code>GET /api/demo/session.wav?path=echo|iem</code> 独立测峰复核。</p>
+  </section>
+
+  <section class="card span-12 launch">
+    <h2>界面启动 / 复核方式</h2>
+    <ol>
+      <li><code>npm start</code> 后浏览器打开 <a href="http://localhost:3000">http://localhost:3000</a>（无需联网、无运行时依赖）。</li>
+      <li>命令行复核：<code>npm test</code>（28 项：DSP 参照 / OLA 流式 / 真实 Worklet 源码 / jsdom 界面接线；首次先 <code>npm install</code> 安装 jsdom）或 <code>npm run verify</code>（生成 <code>output/*.wav</code> 与报告）。</li>
+      <li>真实浏览器端到端（可选）：<code>npm i -D playwright &amp;&amp; npx playwright install chromium</code> 后，先 <code>npm start</code>，再 <code>npm run smoke:browser</code>（31 项交互/下载/参数往返/零控制台错误）。</li>
+      <li>无浏览器 JSON 复核：<code>/api/verify</code>、<code>/api/demo/measurements</code>、<code>/api/demo/session.wav?path=echo|iem</code>。</li>
+    </ol>
+  </section>
+</main>
+
+<script type="module" src="/js/app.js"></script>
+</body>
+</html>
