@@ -27,6 +27,7 @@ export function convolveChannels(channels, h) {
 export class OverlapAddConvolver {
   // blockSize: 每次 push 产出的样本块大小（与 AudioWorklet 128 对齐即可）
   constructor(kernel, blockSize = 128) {
+    if (blockSize && typeof blockSize === 'object') blockSize = blockSize.blockSize || 128;
     this.h = kernel instanceof Float64Array ? kernel : Float64Array.from(kernel);
     this.N = this.h.length;
     this.blockSize = blockSize;

@@ -5,6 +5,7 @@ import { designFir } from './fir-design.js';
 import { convolveDirect, streamConvolve } from './convolution.js';
 import { runSessionSync } from './session.js';
 import { preRingingMetrics, generateImpulse } from './audio.js';
+import { quickFirBackendEvidence, CONVOLUTION_BACKEND_VERSION } from './fir-backend.js';
 
 function check(id, title, pass, detail) {
   return { id, title, pass: !!pass, detail: detail == null ? '' : String(detail) };
@@ -165,12 +166,22 @@ export function runVerification() {
     )
   );
 
-  const pass = results.every((r) => r.pass);
+  const backend = quickFirBackendEvidence();
+
+  const pass = results.every((r) => r.pass) && backend.pass;
   return {
     ok: pass,
     pass,
     passed: results.filter((r) => r.pass).length,
     total: results.length,
     results,
+    convolutionBackendVersion: CONVOLUTION_BACKEND_VERSION,
+    backend: {
+      pass: backend.pass,
+      backendVersion: backend.backendVersion,
+      groupDelaySamples: backend.groupDelaySamples,
+      convolutionError: backend.convolutionError,
+      checks: backend.checks.map((c) => ({ id: c.id, pass: c.pass })),
+    },
   };
 }

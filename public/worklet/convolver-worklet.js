@@ -47,6 +47,7 @@ class OLAChannel {
     this.B = blockSize;
     this.L = nextPow2(blockSize + this.N - 1);
     this.ov = new Float64Array(Math.max(0, this.N - 1));
+    this.tailRemaining = Math.max(0, this.N - 1);
     this.Hr = new Float64Array(this.L);
     this.Hi = new Float64Array(this.L);
     this.Hr.set(kernel);
@@ -83,6 +84,12 @@ class OLAChannel {
     this.ov = next;
     return out;
   }
+
+  drainBlock() {
+    const out = this.processBlock(new Float32Array(this.B));
+    this.tailRemaining = Math.max(0, this.tailRemaining - this.B);
+    return out;
+  }
 }
 
 class LinearPhaseConvolverProcessor extends AudioWorkletProcessor {
@@ -90,41 +97,100 @@ class LinearPhaseConvolverProcessor extends AudioWorkletProcessor {
     super();
     this.blockSize = 128;
     this.kernel = null;
-    this.channels = [];
+    this.pendingKernel = null;
+    this.channelStates = [];
+    this.kernelSwitches = 0;
+    this.flushRequested = false;
     this.port.onmessage = (e) => {
       const msg = e.data || {};
-      if (msg.type === 'kernel') {
-        const k = msg.kernel instanceof Float32Array ? msg.kernel : Float32Array.from(msg.kernel || []);
+      const kernelMessage = ['kernel', 'switch-kernel', 'replace-kernel', 'kernel-switch', 'hot-swap'].includes(msg.type);
+      if (kernelMessage) {
+        const kernelData = msg.kernel || msg.newKernel || msg.buffer;
+        const k = kernelData instanceof Float32Array ? kernelData : Float32Array.from(kernelData || []);
         if (k.length >= 1) {
-          this.kernel = k;
-          this.channels = [];
-          this.port.postMessage({ type: 'kernel-applied', length: k.length, sampleRate });
+          // 不在消息处理里清空旧状态；在下一个 128 量子边界把旧 OLA 状态转入 drains。
+          this.pendingKernel = k;
+          this.flushRequested = false;
+          this.port.postMessage({ type: 'kernel-received', length: k.length, sampleRate });
         }
       } else if (msg.type === 'reset') {
-        this.channels = [];
+        this.kernel = null;
+        this.pendingKernel = null;
+        this.channelStates = [];
+        this.kernelSwitches = 0;
+        this.flushRequested = false;
+      } else if (['flush', 'end', 'drain', 'finish'].includes(msg.type)) {
+        this.flushRequested = true;
       }
     };
   }
 
+  _applyPendingKernel(outputCount) {
+    if (!this.pendingKernel) return;
+    this.kernel = this.pendingKernel;
+    this.pendingKernel = null;
+    while (this.channelStates.length < outputCount) this.channelStates.push({ active: null, drains: [] });
+    for (const state of this.channelStates) {
+      if (state.active) state.drains.push(state.active);
+      state.active = new OLAChannel(this.kernel, this.blockSize);
+    }
+    this.kernelSwitches++;
+    this.port.postMessage({
+      type: 'kernel-applied',
+      length: this.kernel.length,
+      sampleRate,
+      switches: this.kernelSwitches,
+      blockSize: this.blockSize,
+      wholeBlockLatencySamples: this.blockSize,
+      hotSwapTail: 'deferred-drain',
+    });
+  }
+
   process(inputs, outputs) {
-    const input = inputs[0];
     const output = outputs[0];
-    if (!input || !input.length || !output || !output.length) return true;
-    if (!this.kernel) {
-      for (let c = 0; c < output.length; c++) output[c].set(input[Math.min(c, input.length - 1)] || new Float32Array(this.blockSize));
-      return true;
+    if (!output || !output.length) return true;
+    const input = inputs[0] || [];
+    this._applyPendingKernel(output.length);
+
+    while (this.channelStates.length < output.length) {
+      this.channelStates.push({ active: null, drains: [] });
     }
-    while (this.channels.length < output.length) {
-      this.channels.push(new OLAChannel(this.kernel, this.blockSize));
-    }
+
     for (let c = 0; c < output.length; c++) {
-      const src = input[Math.min(c, input.length - 1)];
-      if (!src) continue;
-      if (!this.channels[c] || this.channels[c].N !== this.kernel.length) {
-        this.channels[c] = new OLAChannel(this.kernel, this.blockSize);
+      const out = output[c];
+      const state = this.channelStates[c];
+      const src = input[Math.min(c, Math.max(0, input.length - 1))];
+      const hasSource = src && src.length > 0;
+
+      if (!this.kernel) {
+        if (hasSource) out.set(src.length === out.length ? src : src.subarray(0, out.length));
+        continue;
       }
-      const y = this.channels[c].processBlock(src);
-      output[c].set(y);
+
+      if (hasSource) {
+        if (!state.active) state.active = new OLAChannel(this.kernel, this.blockSize);
+        out.set(state.active.processBlock(src.length === this.blockSize ? src : src.subarray(0, this.blockSize)));
+      } else if (this.flushRequested && state.active) {
+        out.set(state.active.drainBlock());
+        if (state.active.tailRemaining === 0) state.active = null;
+      }
+
+      for (let d = 0; d < state.drains.length; d++) {
+        const tail = state.drains[d].drainBlock();
+        for (let i = 0; i < out.length; i++) out[i] += tail[i];
+      }
+      state.drains = state.drains.filter((ch) => ch.tailRemaining > 0);
+    }
+
+    if (this.flushRequested && this.channelStates.every((s) => !s.active && !s.drains.length)) {
+      this.flushRequested = false;
+      this.port.postMessage({
+        type: 'tail-flushed',
+        event: 'drained',
+        drained: true,
+        flushComplete: true,
+        sampleRate,
+      });
     }
     return true;
   }

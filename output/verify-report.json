@@ -83,6 +83,68 @@
       "detail": "陷波数 0"
     }
   ],
+  "convolutionBackendVersion": "ola-js-2.0.0",
+  "backend": {
+    "pass": true,
+    "backendVersion": "ola-js-2.0.0",
+    "groupDelaySamples": 63,
+    "convolutionError": [
+      {
+        "backend": "deferred-drain",
+        "maxAbs": 3.885780586188048e-15,
+        "rms": 1.2755791933813464e-15,
+        "relativeRms": 4.415780591898515e-15,
+        "lengthActual": 1150,
+        "lengthExpected": 1150
+      },
+      {
+        "backend": "merged-final",
+        "maxAbs": 3.885780586188048e-15,
+        "rms": 1.2755791933813464e-15,
+        "relativeRms": 4.415780591898515e-15,
+        "lengthActual": 1150,
+        "lengthExpected": 1150
+      }
+    ],
+    "checks": [
+      {
+        "id": "convolution-deferred-drain",
+        "pass": true
+      },
+      {
+        "id": "convolution-merged-final",
+        "pass": true
+      },
+      {
+        "id": "impulse-phase-deferred-drain",
+        "pass": true
+      },
+      {
+        "id": "impulse-phase-merged-final",
+        "pass": true
+      },
+      {
+        "id": "tail-once-deferred-drain",
+        "pass": true
+      },
+      {
+        "id": "tail-once-merged-final",
+        "pass": true
+      },
+      {
+        "id": "hot-switch-deferred-drain",
+        "pass": true
+      },
+      {
+        "id": "hot-switch-merged-final",
+        "pass": true
+      },
+      {
+        "id": "config-v1-migration",
+        "pass": true
+      }
+    ]
+  },
   "artifacts": {
     "oldTail": {
       "echoPeakFile": 46955,

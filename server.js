@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { designFromParams, processMaterial, scanLengthTradeoff } from './public/dsp/pipeline.js';
 import { runSession, runSessionSync } from './public/dsp/session.js';
 import { runVerification } from './public/dsp/verify.js';
+import { migrateFilterConfig, quickFirBackendEvidence, verifyFirBackend, BACKEND_BUILD_LOCK } from './public/dsp/fir-backend.js';
 import { encodeWavBuffer } from './public/dsp/wav.js';
 import { defaultTargetPoints } from './public/dsp/target.js';
 
@@ -108,6 +109,17 @@ const server = http.createServer(async (req, res) => {
 
     if (p === '/api/verify') {
       return sendJson(res, 200, runVerification());
+    }
+
+    if (p === '/api/backend' || p === '/api/fir-backend' || p === '/api/backend/verify' || p === '/api/fir-backend/verify') {
+      const long = url.searchParams.get('long') === '1' || url.searchParams.get('long') === 'true';
+      const evidence = p.endsWith('/verify') && long ? verifyFirBackend({ long: true }) : quickFirBackendEvidence();
+      return sendJson(res, evidence.pass ? 200 : 500, { buildLock: BACKEND_BUILD_LOCK, ...evidence });
+    }
+
+    if (p === '/api/config/migrate' && req.method === 'POST') {
+      const body = await readBody(req);
+      return sendJson(res, 200, migrateFilterConfig(body.config || body));
     }
 
     if (p === '/api/session' && req.method === 'POST') {

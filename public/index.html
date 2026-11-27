@@ -136,6 +136,7 @@
   <!-- 5. 实时试听 + 导出 -->
   <section class="card span-5" id="audition-card">
     <div class="card-h"><h2>⑤ 实时试听 / 输出文件</h2>
+      <span id="linear-phase-status" class="badge" data-testid="linear-phase-status">FIR 新路径检查中…</span>
       <span id="audio-status" class="badge">AudioWorklet 未启动</span>
     </div>
     <div class="source-row">
@@ -152,6 +153,19 @@
       <label class="inline"><input type="checkbox" id="chk-wet" checked /> 线性相位湿声（取消=干声直通对比）</label>
     </div>
     <p class="hint" id="audition-info">实时路径：AudioBufferSource → AudioWorklet(overlap-add 卷积当前核) → 输出。不会用普通 Biquad 串联冒充线性相位。</p>
+    <div class="backend-panel" data-testid="fir-backend-panel">
+      <div class="row gap wrap">
+        <span id="backend-status" data-testid="backend-status" class="badge"><span id="fir-backend-status" data-testid="fir-backend-status" data-role="text">FIR 后端待校验</span></span>
+        <span id="backend-version" data-testid="backend-version" class="muted">FIR 后端版本读取中…</span>
+        <span id="backend-latency" data-testid="backend-latency" class="muted"></span>
+      </div>
+      <div id="response-anomaly" data-testid="response-anomaly" class="anomaly" role="status"><span id="response-status" data-testid="response-status" data-role="text">滤波响应校验尚未运行。</span></div>
+      <div id="delay-anomaly" data-testid="delay-anomaly" class="anomaly" role="status"><span id="delay-status" data-testid="delay-status" data-role="text">延迟音频校验尚未运行。</span></div>
+      <div id="backend-evidence" data-testid="backend-evidence" class="muted small"></div>
+    </div>
+    <div class="row gap">
+      <button id="btn-validate-backend" class="btn small" data-testid="btn-validate-backend">校验响应 / 延迟音频</button>
+    </div>
     <div class="row gap">
       <button id="btn-export-wav" class="btn">⬇ 导出处理后 WAV（含完整尾部）</button>
       <span id="export-status" class="muted"></span>
@@ -162,7 +176,10 @@
   <section class="card span-12 session-card" id="session-card">
     <div class="card-h">
       <h2>⑥ 母带回印 × 固定时钟耳返：核长切换 / 交接 / 实测峰位拍差</h2>
-      <button id="btn-run-session" class="btn primary" data-testid="session-run">运行双路径离线会话</button>
+      <div class="row gap">
+        <span id="master-linear-status" class="badge warn" data-testid="master-linear-status">线性相位新路径检查中…</span>
+        <button id="btn-run-session" class="btn primary" data-testid="session-run">运行双路径离线会话</button>
+      </div>
     </div>
 
     <div class="session-config">
@@ -247,9 +264,9 @@
     <h2>界面启动 / 复核方式</h2>
     <ol>
       <li><code>npm start</code> 后浏览器打开 <a href="http://localhost:3000">http://localhost:3000</a>（无需联网、无运行时依赖）。</li>
-      <li>命令行复核：<code>npm test</code>（28 项：DSP 参照 / OLA 流式 / 真实 Worklet 源码 / jsdom 界面接线；首次先 <code>npm install</code> 安装 jsdom）或 <code>npm run verify</code>（生成 <code>output/*.wav</code> 与报告）。</li>
+      <li>命令行仅作辅助复核：<code>npm test</code>（49 项：DSP 参照 / OLA 流式 / 双尾部 FIR 后端 / 热换核 / 配置迁移 / 真实 Worklet 源码与 flush / jsdom 界面接线；首次先 <code>npm install</code> 安装 jsdom）、<code>npm run backend:check</code> 或 <code>npm run verify</code>（生成 <code>output/*.wav</code> 与报告）。图形入口、状态标识和异常字段见 <code>README.md</code>。</li>
       <li>真实浏览器端到端（可选）：<code>npm i -D playwright &amp;&amp; npx playwright install chromium</code> 后，先 <code>npm start</code>，再 <code>npm run smoke:browser</code>（31 项交互/下载/参数往返/零控制台错误）。</li>
-      <li>无浏览器 JSON 复核：<code>/api/verify</code>、<code>/api/demo/measurements</code>、<code>/api/demo/session.wav?path=echo|iem</code>。</li>
+      <li>无浏览器 JSON 复核：<code>/api/verify</code>、<code>/api/backend</code>（长证据可用 <code>/api/backend/verify?long=1</code>）、<code>/api/demo/measurements</code>、<code>/api/demo/session.wav?path=echo|iem</code>。</li>
     </ol>
   </section>
 </main>

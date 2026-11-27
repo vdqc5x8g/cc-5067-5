@@ -65,3 +65,46 @@ test('AudioWorklet 未加载核时直通输入', () => {
   proc.process([[input]], outputs);
   assert.ok(Math.abs(outputs[0][0][10] - 0.3) < 1e-6);
 });
+
+test('AudioWorklet flush 排空完整卷积尾并发出 tail-flushed', () => {
+  const Cls = loadProcessorClass();
+  const proc = new Cls();
+  const messages = [];
+  proc.port.postMessage = (message) => messages.push(message);
+
+  const h = new Float64Array(65);
+  h[32] = 1;
+  proc.port.onmessage({ data: { type: 'kernel', kernel: Float32Array.from(h) } });
+
+  const B = 128;
+  const blocks = 4;
+  const x = new Float64Array(B * blocks);
+  x[400] = 0.9;
+  const chunks = [];
+  for (let b = 0; b < blocks; b++) {
+    const input = new Float32Array(B);
+    input.set(x.subarray(b * B, (b + 1) * B));
+    const outputs = [[new Float32Array(B)]];
+    proc.process([[input]], outputs);
+    chunks.push(outputs[0][0]);
+  }
+
+  proc.port.onmessage({ data: { type: 'flush' } });
+  let flushed = false;
+  for (let b = 0; b < 4 && !flushed; b++) {
+    const outputs = [[new Float32Array(B)]];
+    proc.process([[]], outputs);
+    chunks.push(outputs[0][0]);
+    flushed = messages.some((m) => m.type === 'tail-flushed');
+  }
+
+  assert.equal(flushed, true);
+  assert.equal(messages.filter((m) => m.type === 'tail-flushed').length, 1);
+  const y = new Float64Array(chunks.length * B);
+  chunks.forEach((chunk, i) => y.set(chunk, i * B));
+  const ref = convolveDirect(x, h);
+  let maxAbs = 0;
+  for (let i = 0; i < ref.length; i++) maxAbs = Math.max(maxAbs, Math.abs(y[i] - ref[i]));
+  assert.ok(maxAbs < 2e-5, `flush 尾部误差过大: ${maxAbs}`);
+  assert.ok(Math.abs(y[432] - 0.9) < 1e-5, '冲激峰位/极性必须保留');
+});

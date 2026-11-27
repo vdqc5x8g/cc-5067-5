@@ -2,7 +2,11 @@
 
 import { designFir, scanLengthTradeoff } from './fir-design.js';
 import { convolveDirect } from './convolution.js';
-import { streamConvolve } from './convolution.js';
+import {
+  processWithFirBackend,
+  CONVOLUTION_BACKEND_VERSION,
+  TOLERANCE_PROFILES,
+} from './fir-backend.js';
 import {
   generateImpulse,
   generateSweep,
@@ -48,10 +52,34 @@ export function processMaterial(params = {}, source) {
   const x = source || generateMaterial(params.material || 'drums', design.sampleRate, params);
   const kernel = Float64Array.from(design.kernel);
   const useStreaming = params.streaming !== false;
-  const y = useStreaming
-    ? streamConvolve(x, kernel, params.blockSize || 128)
-    : convolveDirect(x, kernel);
-  return { ok: true, design, input: x, output: y, sampleRate: design.sampleRate };
+  const precision = params.precision || 'float64';
+  let y;
+  let backendEvidence = null;
+  if (useStreaming) {
+    const result = processWithFirBackend(x, kernel, {
+      blockSize: params.blockSize || 128,
+      tailConvention: params.tailConvention || 'deferred-drain',
+      precision,
+    });
+    y = result.output;
+    backendEvidence = {
+      version: CONVOLUTION_BACKEND_VERSION,
+      adapter: 'FirBackendAdapter',
+      tailConvention: result.adapter.tailConvention,
+      latency: result.latency,
+      tolerance: TOLERANCE_PROFILES[precision] || TOLERANCE_PROFILES.float64,
+    };
+  } else {
+    y = convolveDirect(x, kernel);
+  }
+  return {
+    ok: true,
+    design,
+    input: x,
+    output: y,
+    sampleRate: design.sampleRate,
+    backend: backendEvidence,
+  };
 }
 
 export { scanLengthTradeoff };

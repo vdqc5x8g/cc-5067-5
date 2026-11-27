@@ -10,7 +10,7 @@
 // 所有峰位都从真实渲染缓冲里用 findPeak 量出，UI 移动显示标尺不会改变这些数字。
 
 import { designFir, normalizeLength } from './fir-design.js';
-import { convolveDirect } from './convolution.js';
+import { processWithFirBackend, CONVOLUTION_BACKEND_VERSION } from './fir-backend.js';
 import { findPeak, beatSamples, sampleToBeat, generateImpulse, placeDrum } from './audio.js';
 import { detectCombCancellation } from './comb.js';
 import { defaultTargetPoints } from './target.js';
@@ -88,6 +88,14 @@ function crossfadeGains(t, t0, F) {
   return { g1: Math.cos(theta), g2: Math.sin(theta) };
 }
 
+function firThroughNewBackend(x, h) {
+  return processWithFirBackend(x, h, {
+    blockSize: 128,
+    tailConvention: 'deferred-drain',
+    precision: 'float64',
+  }).output;
+}
+
 // 单条路径渲染。switchAt 为本路径实际生效的切换样本（耳返会被块量化）。
 export function renderPath(x, resolved, plan, options = {}) {
   const { h1, h2, gd1, gd2, deltaGd } = resolved;
@@ -99,14 +107,14 @@ export function renderPath(x, resolved, plan, options = {}) {
   const y = new Float64Array(outLen);
 
   if (mode === 'deferred') {
-    const a = convolveDirect(x.subarray(0, switchAt), h1);
+    const a = firThroughNewBackend(x.subarray(0, switchAt), h1);
     for (let i = 0; i < a.length; i++) y[PREROLL + i] += a[i];
-    const b = convolveDirect(x.subarray(switchAt), h2);
+    const b = firThroughNewBackend(x.subarray(switchAt), h2);
     const off = PREROLL + switchAt;
     for (let i = 0; i < b.length; i++) y[off + i] += b[i];
   } else if (mode === 'dual-old' || mode === 'dual-new') {
-    const c1 = convolveDirect(x, h1);
-    const c2 = convolveDirect(x, h2);
+    const c1 = firThroughNewBackend(x, h1);
+    const c2 = firThroughNewBackend(x, h2);
     let off1, off2, t0;
     if (mode === 'dual-old') {
       // c2 左移 Δ，与 c1 对齐到旧群延迟网格
@@ -279,6 +287,12 @@ export async function runSession(config = {}) {
 
   const info = {
     ok: true,
+    convolutionBackendVersion: CONVOLUTION_BACKEND_VERSION,
+    backend: {
+      version: CONVOLUTION_BACKEND_VERSION,
+      renderer: 'processWithFirBackend/FirBackendAdapter',
+      tailConvention: 'deferred-drain',
+    },
     config: {
       sampleRate: resolved.sampleRate,
       bpm: config.bpm || SESSION_DEFAULTS.bpm,
@@ -343,6 +357,12 @@ export function runSessionSync(config = {}) {
   const diffSamples = Math.abs(echoMeasure.peakSampleFile - iem.peakSampleFile);
   return {
     ok: true,
+    convolutionBackendVersion: CONVOLUTION_BACKEND_VERSION,
+    backend: {
+      version: CONVOLUTION_BACKEND_VERSION,
+      renderer: 'processWithFirBackend/FirBackendAdapter',
+      tailConvention: 'deferred-drain',
+    },
     resolved,
     plan,
     input: x,

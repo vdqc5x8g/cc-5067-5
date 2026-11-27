@@ -3,11 +3,26 @@
 
 import { designFir, scanLengthTradeoff } from '/dsp/fir-design.js';
 import { designFromParams, processMaterial, generateMaterial } from '/dsp/pipeline.js';
+import { convolveDirect } from '/dsp/convolution.js';
 import { runSession } from '/dsp/session.js';
 import { runVerification } from '/dsp/verify.js';
 import { encodeWavBytes } from '/dsp/wav.js';
 import { preRingingMetrics } from '/dsp/audio.js';
 import { defaultTargetPoints, PRESET_TARGETS, clamp } from '/dsp/target.js';
+import {
+  BACKEND_BUILD_LOCK,
+  CONVOLUTION_BACKEND_VERSION,
+  DeferredTailConvolutionBackend,
+  MergedFinalBlockConvolutionBackend,
+  compareImpulsePositionAndPhase,
+  convolutionErrorMetrics,
+  createCancellationTailProbe,
+  inspectTailBeats,
+  differenceToOriginalTrack,
+  migrateFilterConfig,
+  processWithFirBackend,
+  quickFirBackendEvidence,
+} from '/dsp/fir-backend.js';
 import { svgEl, clear, setupFrame, pathFromSeries, pathFromPoints, renderStrip, drawWaveform, drawBars, fmtTick } from './plots.js';
 
 const $ = (id) => document.getElementById(id);
@@ -27,6 +42,7 @@ const state = {
   auditionMaterial: 'drums',
   uploadedBuffer: null,
   session: null,
+  backendEvidence: null,
   urls: { echo: null, iem: null },
 };
 
@@ -41,6 +57,9 @@ function collectParams() {
     stopbandDb: Number($('input-stopband').value),
     kaiserBeta: undefined,
     sampleRate: Number($('select-sampleRate').value),
+    convolutionBackend: CONVOLUTION_BACKEND_VERSION,
+    tailConvention: 'auto',
+    latencyPolicy: 'measure-and-preserve',
   };
 }
 
@@ -65,7 +84,12 @@ function saveLocal() {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
     try {
-      localStorage.setItem(STORE_KEY, JSON.stringify({ params: collectParams(), session: collectSessionConfig() }));
+      localStorage.setItem(STORE_KEY, JSON.stringify({
+        app: 'linear-phase-eq',
+        version: 2,
+        params: collectParams(),
+        session: collectSessionConfig(),
+      }));
     } catch { /* 隐私模式忽略 */ }
   }, 250);
 }
@@ -73,14 +97,17 @@ function saveLocal() {
 function applyPersisted() {
   let raw = null;
   try { raw = JSON.parse(localStorage.getItem(STORE_KEY) || 'null'); } catch { raw = null; }
-  if (raw?.params) applyParams(raw.params, false);
-  if (raw?.session) {
+  if (!raw) return;
+  const migrated = migrateFilterConfig(raw);
+  if (migrated.params) applyParams(migrated.params, false);
+  const session = migrated.session || raw.session;
+  if (session) {
     for (const [id, key] of [
       ['select-scenario', 'scenario'], ['input-N1', 'N1'], ['input-N2', 'N2'],
       ['input-bpm', 'bpm'], ['input-iemBlock', 'iemBlock'], ['select-session-material', 'material'],
       ['select-echo-mode', 'echoMode'], ['select-iem-mode', 'iemMode'],
     ]) {
-      if (raw.session[key] != null) $(id).value = raw.session[key];
+      if (session[key] != null) $(id).value = session[key];
     }
   }
 }
@@ -121,6 +148,8 @@ function redesign() {
     fb.className = 'feedback show error';
     fb.innerHTML = `内核设计失败：${result.message}` +
       (result.suggestion?.firType ? ` <button class="btn small" id="btn-fix-type">自动改为 ${result.suggestion.firType} 型</button>` : '');
+    setBackendAnomaly('bad', `滤波响应异常：${result.message}`, '延迟音频未校验：当前没有有效线性相位核。');
+    setLinearPhaseStatus('无效内核', 'bad');
     const fix = $('btn-fix-type');
     if (fix) fix.onclick = () => {
       $('select-firType').value = result.suggestion.firType;
@@ -142,6 +171,7 @@ function redesign() {
   evaluateSpec();
   postWorkletKernel();
   saveLocal();
+  scheduleBackendValidation();
 }
 
 function evaluateSpec() {
@@ -187,6 +217,188 @@ function renderMetrics() {
     : d.groupDelay.maxDeviationSamples.toExponential(1);
   const pre = preRingingMetrics(d.kernel, Math.round(d.groupDelaySamples));
   $('metric-prering').textContent = pre.preEnergyDb.toFixed(1);
+}
+
+/* ---------------- FIR 新后端执行证据 ---------------- */
+
+let backendValidationTimer = 0;
+
+function setText(id, text) {
+  const el = $(id);
+  if (el) el.textContent = text;
+}
+
+function setAnomaly(id, kind, text) {
+  const el = $(id);
+  if (!el) return;
+  el.className = `anomaly ${kind || ''}`.trim();
+  const textEl = el.querySelector('[data-role="text"]');
+  if (textEl) textEl.textContent = text;
+  else el.textContent = text;
+  for (const aliasId of [`${id}-status`]) {
+    const alias = $(aliasId);
+    if (alias && alias !== textEl) alias.textContent = text;
+  }
+}
+
+function setBackendAnomaly(responseKind, responseText, delayKind, delayText) {
+  setAnomaly('response-anomaly', responseKind, responseText);
+  setAnomaly('delay-anomaly', delayKind, delayText);
+}
+
+function setLinearPhaseStatus(text, kind) {
+  for (const id of ['linear-phase-status', 'master-linear-status', 'backend-status']) {
+    const el = $(id);
+    if (!el) continue;
+    el.className = `badge ${kind || ''}`.trim();
+    const textEl = el.querySelector('[data-role="text"]');
+    if (textEl) textEl.textContent = text;
+    else el.textContent = text;
+  }
+  const alias = $('fir-backend-status');
+  if (alias) alias.textContent = text;
+}
+
+function scheduleBackendValidation() {
+  clearTimeout(backendValidationTimer);
+  backendValidationTimer = setTimeout(() => {
+    try { validateLinearPhaseBackend(); }
+    catch (err) {
+      setLinearPhaseStatus('FIR 校验异常', 'bad');
+      setAnomaly('delay-anomaly', 'bad', '延迟音频校验抛出异常：' + err.message);
+    }
+  }, 180);
+}
+
+function finiteResponseOk(d) {
+  const arrays = [d.response?.magDb, d.response?.phaseUnwrapped, d.response?.gd];
+  return arrays.every((arr) => Array.isArray(arr) && arr.every((v) => Number.isFinite(v) || v == null));
+}
+
+function validateLinearPhaseBackend() {
+  setText('backend-version', `FIR 后端 ${CONVOLUTION_BACKEND_VERSION} · API ${BACKEND_BUILD_LOCK.firBackendApiVersion} · lockfile v${BACKEND_BUILD_LOCK.lockfileVersion}`);
+  setText('backend-latency', '两种后端均报告整块 B=128；算法群延迟以契约/实测为准，输出保留 x+N−1 尾部。');
+  const d = state.design;
+  if (!d) {
+    setLinearPhaseStatus('无有效线性相位核', 'bad');
+    setAnomaly('response-anomaly', 'bad', '滤波响应异常：当前参数无法设计有效 FIR。');
+    setAnomaly('delay-anomaly', 'bad', '延迟音频未校验：没有可运行的内核。');
+    return null;
+  }
+
+  const gdDev = d.groupDelay?.maxDeviationSamples ?? Infinity;
+  const symResidual = d.symmetryResidual?.symmetricMaxError ?? Infinity;
+  const responseFinite = finiteResponseOk(d);
+  const responseHardPass = responseFinite && gdDev < 1e-6 && symResidual < 1e-8;
+  const approxErr = d.approximation?.maxErrorDb;
+  const responseWarn = approxErr != null && approxErr > 1.5;
+  if (responseHardPass) {
+    setAnomaly(
+      'response-anomaly',
+      responseWarn ? 'warn' : 'good',
+      `${responseWarn ? '滤波响应警告' : '滤波响应正常'}：GD 波动 ${gdDev.toExponential(2)} 样本，对称残差 ${symResidual.toExponential(1)}` +
+      (approxErr != null ? `，最大逼近误差 ${approxErr.toFixed(2)} dB${responseWarn ? '（>1.5 dB）' : ''}` : '')
+    );
+  } else {
+    setAnomaly('response-anomaly', 'bad', `滤波响应异常：有限曲线=${responseFinite}，GD 波动=${gdDev}，对称残差=${symResidual}`);
+  }
+
+  const p = 192;
+  const x = new Float64Array(p + d.kernel.length + 256);
+  x[p] = 1;
+  const expected = convolveDirect(x, d.kernel);
+  const rows = [];
+  let delayPass = true;
+  let worstError = 0;
+  let worstCoherence = 1;
+  for (const [label, BackendClass] of [
+    ['延后排空', DeferredTailConvolutionBackend],
+    ['末块合并', MergedFinalBlockConvolutionBackend],
+  ]) {
+    const actual = new BackendClass(d.kernel, { blockSize: 128 }).processAll(x);
+    const cmp = compareImpulsePositionAndPhase(actual, expected, {
+      groupDelaySamples: p + d.groupDelaySamples,
+      searchFrom: p,
+      searchTo: Math.min(actual.length - 1, p + d.kernel.length + 96),
+    });
+    delayPass = delayPass && cmp.pass;
+    worstError = Math.max(worstError, cmp.error.maxAbs);
+    worstCoherence = Math.min(worstCoherence, cmp.phase.coherence);
+    rows.push({ label, cmp, length: actual.length });
+  }
+
+  const lengthOk = rows.every((r) => r.length === expected.length);
+
+  const probe = createCancellationTailProbe({ blockSize: 128, kernelLength: 65 });
+  const tailRows = [];
+  let tailPass = true;
+  for (const [label, BackendClass] of [
+    ['延后排空', DeferredTailConvolutionBackend],
+    ['末块合并', MergedFinalBlockConvolutionBackend],
+  ]) {
+    const tailOutput = new BackendClass(probe.kernel, { blockSize: 128 }).processAll(probe.input);
+    const beats = inspectTailBeats(tailOutput, probe.input, { groupDelaySamples: probe.groupDelaySamples, threshold: 0.5 });
+    const difference = differenceToOriginalTrack(tailOutput, probe.input, probe.groupDelaySamples);
+    const pass = beats.pass && difference.alignedMaxAbs < 1e-8;
+    tailPass = tailPass && pass;
+    tailRows.push({
+      label,
+      pass,
+      actualBeatCount: beats.actualBeatCount,
+      inputBeatCount: beats.expectedBeatCount,
+      extraPeaks: beats.extraPeaks.length,
+      alignedMaxAbs: difference.alignedMaxAbs,
+    });
+  }
+  delayPass = delayPass && tailPass;
+
+  if (delayPass && lengthOk) {
+    setAnomaly(
+      'delay-anomaly',
+      'good',
+      `延迟音频正常：峰位=${rows[0].cmp.actual.peakIndex}（输入 ${p}+GD ${d.groupDelaySamples}），` +
+      `峰位差 ${rows.map((r) => r.cmp.peakDeltaSamples).join('/')}，最大卷积误差 ${worstError.toExponential(2)}，` +
+      `相位相干 ${worstCoherence.toFixed(8)}；尾拍 ${tailRows.map((r) => `${r.actualBeatCount}/${r.inputBeatCount}`).join('/')} 枚，未被记录两次，` +
+      `反相抵消残差 ${Math.max(...tailRows.map((r) => r.alignedMaxAbs)).toExponential(2)}；尾部长度 ${expected.length}=x+N−1。`
+    );
+  } else {
+    setAnomaly(
+      'delay-anomaly',
+      'bad',
+      `延迟音频异常：长度一致=${lengthOk}，尾拍检查=${tailRows.map((r) => `${r.label}:${r.actualBeatCount}/${r.inputBeatCount}/extra=${r.extraPeaks}/pass=${r.pass}`).join('；')}；详情 ` + rows.map((r) => `${r.label}(Δ峰=${r.cmp.peakDeltaSamples}, err=${r.cmp.error.maxAbs.toExponential(2)}, phase=${r.cmp.phase.coherence.toFixed(5)}, pass=${r.cmp.pass})`).join('；')
+    );
+  }
+
+  const evidence = {
+    at: new Date().toISOString(),
+    backendVersion: CONVOLUTION_BACKEND_VERSION,
+    responseHardPass,
+    responseWarn,
+    delayPass,
+    lengthOk,
+    tailPass,
+    tailRows,
+    worstError,
+    worstCoherence,
+    rows: rows.map((r) => ({
+      backend: r.label,
+      pass: r.cmp.pass,
+      peakIndex: r.cmp.actual.peakIndex,
+      peakDeltaSamples: r.cmp.peakDeltaSamples,
+      maxAbs: r.cmp.error.maxAbs,
+      coherence: r.cmp.phase.coherence,
+      length: r.length,
+    })),
+    quickSuite: quickFirBackendEvidence(),
+  };
+  state.backendEvidence = evidence;
+  window.__backendEvidence = evidence;
+  setText('backend-evidence', `执行证据：${evidence.quickSuite.passed ?? evidence.quickSuite.checks.filter((c) => c.pass).length}/${evidence.quickSuite.checks.length} 项后端检查通过；群延迟与卷积误差均来自真实卷积缓冲，不是静态声明。`);
+  setLinearPhaseStatus(
+    responseHardPass && delayPass ? '线性相位新路径运行中' : '线性相位检查异常',
+    responseHardPass && delayPass ? 'good' : 'bad'
+  );
+  return evidence;
 }
 
 /* ---------------- EQ 编辑器 ---------------- */
@@ -531,8 +743,12 @@ async function ensureAudio() {
     node.connect(wetGain).connect(actx.destination);
     dryGain.connect(actx.destination);
     node.port.onmessage = (e) => {
-      if (e.data.type === 'kernel-applied') {
-        $('audio-status').textContent = `Worklet 卷积中 N=${e.data.length} @ ${e.data.sampleRate}Hz`;
+      const data = e.data || {};
+      if (data.type === 'kernel-applied') {
+        $('audio-status').textContent = `Worklet 卷积中 N=${data.length} @ ${data.sampleRate}Hz · 热切换#${data.switches || 1}`;
+        $('audio-status').className = 'badge good';
+      } else if (data.type === 'tail-flushed') {
+        $('audio-status').textContent = `Worklet 尾部已完整排空 @ ${data.sampleRate}Hz`;
         $('audio-status').className = 'badge good';
       }
     };
@@ -570,7 +786,9 @@ async function playAudition() {
     srcNode.connect(node);
     srcNode.connect(dryGain);
     applyWetMix();
-    srcNode.onended = () => { /* 自然结束保留状态 */ };
+    srcNode.onended = () => {
+      try { node.port.postMessage({ type: 'flush' }); } catch { /* worklet 已不可用时无需冲洗 */ }
+    };
     srcNode.start();
     $('audio-status').textContent = state.design ? `实时卷积 N=${state.design.N} 播放中…` : '无有效内核（当前为干声）';
     $('audio-status').className = 'badge ' + (state.design ? 'good' : 'bad');
@@ -614,10 +832,14 @@ async function exportWav() {
       sr = state.uploadedBuffer.sampleRate;
       const d = designFromParams({ ...collectParams(), sampleRate: sr });
       if (!d.ok) throw new Error(d.message);
-      const { streamConvolve } = await import('/dsp/convolution.js');
+      const { processWithFirBackend } = await import('/dsp/fir-backend.js');
       channels = [];
       for (let c = 0; c < state.uploadedBuffer.numberOfChannels; c++) {
-        channels.push(streamConvolve(state.uploadedBuffer.getChannelData(c), Float64Array.from(d.kernel), 128));
+        channels.push(processWithFirBackend(
+          state.uploadedBuffer.getChannelData(c),
+          Float64Array.from(d.kernel),
+          { blockSize: 128, tailConvention: 'deferred-drain' }
+        ).output);
       }
       tag = 'upload';
     } else {
@@ -639,7 +861,14 @@ async function exportWav() {
 /* ---------------- 参数文件 ---------------- */
 
 function saveParamFile() {
-  const payload = { app: 'linear-phase-eq', version: 1, params: collectParams(), session: collectSessionConfig() };
+  const payload = {
+    app: 'linear-phase-eq',
+    version: 2,
+    schemaVersion: 2,
+    backend: BACKEND_BUILD_LOCK,
+    params: collectParams(),
+    session: collectSessionConfig(),
+  };
   downloadBytes(new TextEncoder().encode(JSON.stringify(payload, null, 2)), 'lpeq-params.json', 'application/json');
 }
 
@@ -648,13 +877,15 @@ function loadParamFile(file) {
   reader.onload = () => {
     try {
       const json = JSON.parse(reader.result);
-      applyParams(json.params || json);
-      if (json.session) {
+      const migrated = migrateFilterConfig(json);
+      applyParams(migrated.params);
+      const session = migrated.session || json.session;
+      if (session) {
         for (const [id, key] of [
           ['select-scenario', 'scenario'], ['input-N1', 'N1'], ['input-N2', 'N2'],
           ['input-bpm', 'bpm'], ['input-iemBlock', 'iemBlock'], ['select-session-material', 'material'],
           ['select-echo-mode', 'echoMode'], ['select-iem-mode', 'iemMode'],
-        ]) if (json.session[key] != null) $(id).value = json.session[key];
+        ]) if (session[key] != null) $(id).value = session[key];
         saveLocal();
       }
     } catch (e) {
@@ -703,12 +934,14 @@ function bindEvents() {
     if (state.design) {
       state.compare = state.design;
       renderResponse();
+      validateLinearPhaseBackend();
     }
   });
   $('btn-compare-clear').addEventListener('click', () => { state.compare = null; renderResponse(); });
 
   $('btn-scan').addEventListener('click', runScan);
   $('btn-self-test').addEventListener('click', runSelfTestUi);
+  $('btn-validate-backend').addEventListener('click', () => validateLinearPhaseBackend());
   $('btn-run-session').addEventListener('click', runSessionUi);
 
   $('material-row').addEventListener('click', (e) => {
@@ -780,11 +1013,18 @@ function bindEvents() {
 
 function exposeApi() {
   window.LPEQ = {
-    version: '1.0.0',
+    version: '1.1.0',
+    backendVersion: CONVOLUTION_BACKEND_VERSION,
+    buildLock: BACKEND_BUILD_LOCK,
     designFir,
     scanLengthTradeoff,
     runVerification,
     runSession,
+    migrateFilterConfig,
+    quickFirBackendEvidence,
+    validateLinearPhaseBackend,
+    validateBackend: validateLinearPhaseBackend,
+    get backendEvidence() { return state.backendEvidence; },
     get state() { return state; },
     redesign,
     async runSessionNow() { return runSessionUi(); },
